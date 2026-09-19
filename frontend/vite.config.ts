@@ -15,6 +15,11 @@ const standardJsonEsm = fileURLToPath(
 const config = defineConfig(() => {
   return {
     base: "/",
+    server: {
+      host: "127.0.0.1",
+      port: 3300,
+      strictPort: true,
+    },
     resolve: {
       tsconfigPaths: true,
       alias: [
