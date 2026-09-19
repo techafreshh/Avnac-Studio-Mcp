@@ -8,7 +8,7 @@ The MCP server allows external AI agents and clients to interact with the Avnac 
 
 ### Architecture
 
-1. **MCP Server (`server.go`)**: Runs an HTTP server on `127.0.0.1:8888`. It listens for incoming SSE connections on `/sse`, `/message`, and `/`.
+1. **MCP Server (`server.go`)**: Runs an HTTP server on `127.0.0.1:12345`. It listens for incoming SSE connections on `/sse`, `/message`, and `/`.
 2. **Tool Registration (`tools.go`)**: Defines the tools available to MCP clients. When a tool is invoked by a client, the Go backend processes the request and emits a Wails IPC event (`mcp:action`) to the frontend.
 3. **Frontend Listener (`frontend/src/lib/mcp-listener.ts`)**: The React frontend listens for the `mcp:action` event and applies the requested changes directly to the Fabric.js canvas.
 
