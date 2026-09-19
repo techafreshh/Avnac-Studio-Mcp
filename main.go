@@ -38,6 +38,7 @@ func main() {
 			app.Unsplash,
 			app.Config,
 			app.Secrets,
+			app.MCPServer,
 		},
 	}
 

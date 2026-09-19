@@ -6,6 +6,7 @@ import (
 
 	avnacconfig "Avnac/avnac-system/config"
 	avnacio "Avnac/avnac-system/io"
+	mcp "Avnac/avnac-system/mcp"
 	avnacsecrets "Avnac/avnac-system/secrets"
 	avnacserver "Avnac/avnac-system/server"
 
@@ -22,6 +23,7 @@ type App struct {
 	Unsplash   *avnacserver.UnsplashService
 	Rembg      *avnacserver.RembgService
 	mediaProxy *avnacserver.MediaProxy
+	MCPServer  *mcp.AvnacMCP
 }
 
 // NewApp creates a new App application struct
@@ -39,6 +41,7 @@ func NewApp() *App {
 		Unsplash:   unsplash,
 		Rembg:      rembg,
 		mediaProxy: proxy,
+		MCPServer:  mcp.NewAvnacMCP(unsplash),
 	}
 }
 
@@ -54,6 +57,8 @@ func (a *App) MediaProxyMiddleware() assetserver.Middleware {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	a.MCPServer.Start(ctx)
 
 	appDir, err := avnacio.EnsureAppDirs()
 	if err != nil {
