@@ -719,5 +719,27 @@ export function initMCPListener(navigate?: (options: any) => void) {
     }
   };
 
-  return EventsOn("mcp:action", handler);
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  if ((window as any).runtime?.EventsOnMultiple) {
+    return EventsOn("mcp:action", handler);
+  }
+
+  let unsub: (() => void) | undefined;
+  const interval = setInterval(() => {
+    if ((window as any).runtime?.EventsOnMultiple) {
+      clearInterval(interval);
+      unsub = EventsOn("mcp:action", handler);
+    }
+  }, 100);
+
+  const timeout = setTimeout(() => clearInterval(interval), 10000);
+
+  return () => {
+    clearInterval(interval);
+    clearTimeout(timeout);
+    unsub?.();
+  };
 }

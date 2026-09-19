@@ -57,9 +57,9 @@ func (m *AvnacMCP) Start(wailsCtx context.Context) {
 			body, err := io.ReadAll(r.Body)
 			if err == nil {
 				var probe struct {
-					JSONRPC string          `json:"jsonrpc"`
-					ID      json.RawMessage `json:"id"`
-					Method  string          `json:"method"`
+					JSONRPC string `json:"jsonrpc"`
+					ID      any    `json:"id"`
+					Method  string `json:"method"`
 				}
 				if json.Unmarshal(body, &probe) == nil && probe.Method == "server/discover" {
 					w.Header().Set("Content-Type", "application/json")
@@ -95,7 +95,7 @@ func (m *AvnacMCP) Start(wailsCtx context.Context) {
 	mux.Handle("/", handler)
 
 	m.httpServer = &http.Server{
-		Addr:    "127.0.0.1:12345",
+		Addr:    ":12345",
 		Handler: mux,
 	}
 

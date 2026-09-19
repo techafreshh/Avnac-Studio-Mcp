@@ -38,6 +38,19 @@ const config = defineConfig(() => {
       ],
     },
     plugins: [
+      {
+        name: "wails-dev-passthrough",
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url?.startsWith("/wails/")) {
+              res.statusCode = 404;
+              res.end();
+              return;
+            }
+            next();
+          });
+        },
+      },
       tanstackRouter({ target: "react" }),
       tailwindcss(),
       viteReact(),
