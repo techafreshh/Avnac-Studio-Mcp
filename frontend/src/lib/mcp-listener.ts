@@ -8,11 +8,9 @@ import {
   type SaraswatiNode,
   type SaraswatiShadow,
 } from "@/lib/saraswati";
-import {
-  renderSceneToCanvas,
-  renderSceneToPngDataUrl,
-} from "@/lib/renderer/offscreen-render";
+import { renderSceneToCanvas, renderSceneToPngDataUrl } from "@/lib/renderer/offscreen-render";
 import { GOOGLE_FONT_FAMILIES } from "@/data/google-font-families";
+import { ARTBOARD_PRESETS } from "@/data/artboard-presets";
 
 interface MCPActionPayload {
   action: string;
@@ -72,12 +70,15 @@ export function initMCPListener(navigate?: (options: any) => void) {
       if (action === "create_canvas") {
         const { width, height } = payload;
         const newId = crypto.randomUUID();
+        const w = width || 1080;
+        const h = height || 1080;
         if (navigate) {
           void navigate({
             to: "/scene",
-            search: { id: newId, w: width, h: height },
+            search: { id: newId, w, h },
           });
         }
+        void store.load(newId, { w, h });
         if (requestId) {
           SubmitResponse(requestId, {
             success: true,
@@ -602,6 +603,37 @@ export function initMCPListener(navigate?: (options: any) => void) {
             }
           }
 
+          if (payload?.objectId) {
+            const targetNode = scene.nodes[payload.objectId];
+            if (!targetNode) {
+              SubmitResponse(requestId, { error: `Object ${payload.objectId} not found in scene` });
+              return;
+            }
+            const scale = canvas.width / Math.max(1, scene.artboard.width);
+            const nx = ("x" in targetNode ? (targetNode as any).x : 0) * scale;
+            const ny = ("y" in targetNode ? (targetNode as any).y : 0) * scale;
+            const nw = ("width" in targetNode ? (targetNode as any).width : 100) * scale;
+            const nh = ("height" in targetNode ? (targetNode as any).height : 100) * scale;
+
+            const pad = 8;
+            const cropX = Math.max(0, Math.floor(nx - pad));
+            const cropY = Math.max(0, Math.floor(ny - pad));
+            const cropW = Math.min(canvas.width - cropX, Math.ceil(nw + pad * 2));
+            const cropH = Math.min(canvas.height - cropY, Math.ceil(nh + pad * 2));
+
+            const cropCanvas = document.createElement("canvas");
+            cropCanvas.width = Math.max(1, cropW);
+            cropCanvas.height = Math.max(1, cropH);
+            const cropCtx = cropCanvas.getContext("2d");
+            if (cropCtx) {
+              cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+              const dataUrl = cropCanvas.toDataURL("image/png");
+              const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
+              SubmitResponse(requestId, { imageData: base64Data });
+              return;
+            }
+          }
+
           const dataUrl = canvas.toDataURL("image/png");
           const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
           SubmitResponse(requestId, { imageData: base64Data });
@@ -631,6 +663,26 @@ export function initMCPListener(navigate?: (options: any) => void) {
         const { color } = payload;
         if (color) {
           store.setArtboard(undefined, undefined, parseColor(color));
+        }
+        return;
+      }
+
+      if (action === "apply_artboard_preset") {
+        const { presetId } = payload;
+        const preset = ARTBOARD_PRESETS.find((p) => p.id === presetId);
+        if (preset) {
+          store.setArtboard(preset.width, preset.height);
+        }
+        return;
+      }
+
+      if (action === "get_object_properties" && requestId) {
+        const scene = store.scene;
+        const node = scene?.nodes[payload?.objectId];
+        if (node) {
+          SubmitResponse(requestId, { node });
+        } else {
+          SubmitResponse(requestId, { error: `Object ${payload?.objectId} not found` });
         }
         return;
       }
