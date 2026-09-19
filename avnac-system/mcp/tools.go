@@ -38,6 +38,8 @@ type ElementDefinition struct {
 	Type          string            `json:"type"`
 	Left          *float64          `json:"left,omitempty"`
 	Top           *float64          `json:"top,omitempty"`
+	X             *float64          `json:"x,omitempty"`
+	Y             *float64          `json:"y,omitempty"`
 	Width         *float64          `json:"width,omitempty"`
 	Height        *float64          `json:"height,omitempty"`
 	Fill          *string           `json:"fill,omitempty"`
@@ -47,6 +49,7 @@ type ElementDefinition struct {
 	FontFamily    *string           `json:"fontFamily,omitempty"`
 	Blur          *float64          `json:"blur,omitempty"`
 	Radius        *float64          `json:"radius,omitempty"`
+	CornerRadius  *float64          `json:"cornerRadius,omitempty"`
 	Shadow        *ShadowDefinition `json:"shadow,omitempty"`
 	URL           *string           `json:"url,omitempty"`
 	StickerName   *string           `json:"stickerName,omitempty"`
@@ -57,6 +60,11 @@ type ElementDefinition struct {
 	Y2            *float64          `json:"y2,omitempty"`
 	GradientAngle *float64          `json:"gradientAngle,omitempty"`
 	GradientStops []GradientStop    `json:"gradientStops,omitempty"`
+	Stroke        *string           `json:"stroke,omitempty"`
+	StrokeWidth   *float64          `json:"strokeWidth,omitempty"`
+	Angle         *float64          `json:"angle,omitempty"`
+	Rotation      *float64          `json:"rotation,omitempty"`
+	Opacity       *float64          `json:"opacity,omitempty"`
 }
 
 type RenderElementsInput struct {
@@ -69,6 +77,8 @@ type ElementModification struct {
 	Type          *string           `json:"type,omitempty"`
 	Left          *float64          `json:"left,omitempty"`
 	Top           *float64          `json:"top,omitempty"`
+	X             *float64          `json:"x,omitempty"`
+	Y             *float64          `json:"y,omitempty"`
 	Width         *float64          `json:"width,omitempty"`
 	Height        *float64          `json:"height,omitempty"`
 	Fill          *string           `json:"fill,omitempty"`
@@ -78,10 +88,12 @@ type ElementModification struct {
 	FontFamily    *string           `json:"fontFamily,omitempty"`
 	Blur          *float64          `json:"blur,omitempty"`
 	Radius        *float64          `json:"radius,omitempty"`
+	CornerRadius  *float64          `json:"cornerRadius,omitempty"`
 	Shadow        *ShadowDefinition `json:"shadow,omitempty"`
 	ScaleX        *float64          `json:"scaleX,omitempty"`
 	ScaleY        *float64          `json:"scaleY,omitempty"`
 	Angle         *float64          `json:"angle,omitempty"`
+	Rotation      *float64          `json:"rotation,omitempty"`
 	Opacity       *float64          `json:"opacity,omitempty"`
 	Action        *string           `json:"action,omitempty"`
 	Name          *string           `json:"name,omitempty"`
@@ -112,6 +124,8 @@ type CreateCanvasInput struct {
 	Height int `json:"height"`
 	// The name of the workspace
 	Name string `json:"name,omitempty"`
+	// The background color of the canvas
+	BackgroundColor string `json:"backgroundColor,omitempty"`
 }
 
 type SetBackgroundInput struct {

@@ -68,7 +68,7 @@ export function initMCPListener(navigate?: (options: any) => void) {
       const store = useSceneEditorStore.getState();
 
       if (action === "create_canvas") {
-        const { width, height } = payload;
+        const { width, height, backgroundColor, color } = payload;
         const newId = crypto.randomUUID();
         const w = width || 1080;
         const h = height || 1080;
@@ -78,7 +78,11 @@ export function initMCPListener(navigate?: (options: any) => void) {
             search: { id: newId, w, h },
           });
         }
-        void store.load(newId, { w, h });
+        await store.load(newId, { w, h });
+        const bg = backgroundColor || color;
+        if (bg) {
+          store.applyCommands([{ type: "SET_ARTBOARD", bg: parseColor(bg) }]);
+        }
         if (requestId) {
           SubmitResponse(requestId, {
             success: true,
@@ -118,11 +122,11 @@ export function initMCPListener(navigate?: (options: any) => void) {
         for (const el of elements) {
           const id = el.id || crypto.randomUUID();
           const name = el.name || el.type;
-          const x = el.left ?? scene.artboard.width / 2 - 50;
-          const y = el.top ?? scene.artboard.height / 2 - 50;
+          const x = el.x ?? el.left ?? scene.artboard.width / 2 - 50;
+          const y = el.y ?? el.top ?? scene.artboard.height / 2 - 50;
           const width = el.width ?? 100;
           const height = el.height ?? 100;
-          const rotation = el.angle ?? 0;
+          const rotation = el.rotation ?? el.angle ?? 0;
           const opacity = el.opacity ?? 1;
           const blur = el.blur ?? 0;
           const fill = parseColor(el.fill ?? el.color);
@@ -157,8 +161,8 @@ export function initMCPListener(navigate?: (options: any) => void) {
               originY: "top",
               width,
               height,
-              radiusX: el.radius ?? 0,
-              radiusY: el.radius ?? 0,
+              radiusX: el.cornerRadius ?? el.radius ?? 0,
+              radiusY: el.cornerRadius ?? el.radius ?? 0,
               fill,
               stroke: el.stroke ? parseColor(el.stroke) : null,
               strokeWidth: el.strokeWidth ?? 0,
@@ -317,7 +321,7 @@ export function initMCPListener(navigate?: (options: any) => void) {
               cropX: 0,
               cropY: 0,
               clipPath: null,
-              borderRadius: el.radius ?? 0,
+              borderRadius: el.cornerRadius ?? el.radius ?? 0,
               shadow,
               blur,
             };
@@ -410,7 +414,9 @@ export function initMCPListener(navigate?: (options: any) => void) {
           if (!node) continue;
           modifiedCount++;
 
-          if (mod.left !== undefined || mod.top !== undefined || mod.width !== undefined || mod.height !== undefined) {
+          const newX = mod.x ?? mod.left;
+          const newY = mod.y ?? mod.top;
+          if (newX !== undefined || newY !== undefined || mod.width !== undefined || mod.height !== undefined) {
             const currentX = "x" in node ? (node as any).x : 0;
             const currentY = "y" in node ? (node as any).y : 0;
             const currentW = "width" in node ? (node as any).width : 100;
@@ -418,15 +424,16 @@ export function initMCPListener(navigate?: (options: any) => void) {
             commands.push({
               type: "RESIZE_NODE",
               id: mod.objectId,
-              x: mod.left ?? currentX,
-              y: mod.top ?? currentY,
+              x: newX ?? currentX,
+              y: newY ?? currentY,
               width: mod.width ?? currentW,
               height: mod.height ?? currentH,
             });
           }
 
-          if (mod.angle !== undefined) {
-            commands.push({ type: "ROTATE_NODE", id: mod.objectId, rotation: mod.angle });
+          const rot = mod.rotation ?? mod.angle;
+          if (rot !== undefined) {
+            commands.push({ type: "ROTATE_NODE", id: mod.objectId, rotation: rot });
           }
 
           if (mod.opacity !== undefined) {
@@ -438,19 +445,20 @@ export function initMCPListener(navigate?: (options: any) => void) {
             commands.push({ type: "SET_NODE_FILL", id: mod.objectId, fill });
           }
 
-          if (mod.radius !== undefined) {
+          const rad = mod.cornerRadius ?? mod.radius;
+          if (rad !== undefined) {
             if (node.type === "rect") {
               commands.push({
                 type: "SET_NODE_CORNER_RADIUS",
                 id: mod.objectId,
-                radiusX: mod.radius,
-                radiusY: mod.radius,
+                radiusX: rad,
+                radiusY: rad,
               });
             } else if (node.type === "image") {
               commands.push({
                 type: "SET_IMAGE_BORDER_RADIUS",
                 id: mod.objectId,
-                radius: mod.radius,
+                radius: rad,
               });
             }
           }
