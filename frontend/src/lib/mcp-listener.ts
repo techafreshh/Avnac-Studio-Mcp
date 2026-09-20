@@ -54,11 +54,45 @@ function starPolygonPoints(pointsCount: number, outerRadius: number) {
   return points;
 }
 
+let activeNavigate: ((options: any) => void) | undefined;
+let activeUnsub: (() => void) | undefined;
+let isSubscribed = false;
+
+async function getReadyScene(timeoutMs = 4000): Promise<{
+  store: ReturnType<typeof useSceneEditorStore.getState>;
+  scene: ReturnType<typeof useSceneEditorStore.getState>["scene"];
+}> {
+  let store = useSceneEditorStore.getState();
+  let scene = store.scene;
+  if (scene) return { store, scene };
+
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 100));
+    store = useSceneEditorStore.getState();
+    scene = store.scene;
+    if (scene) return { store, scene };
+  }
+  return { store, scene: null };
+}
+
 /**
  * Initializes the Saraswati MCP event listener.
  * Connects Wails IPC events to the global useSceneEditorStore.
  */
 export function initMCPListener(navigate?: (options: any) => void) {
+  if (navigate) {
+    activeNavigate = navigate;
+  }
+
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  if (isSubscribed) {
+    return () => {};
+  }
+
   const handler = async (data: any) => {
     try {
       const actionData = Array.isArray(data) ? data[0] : data;
@@ -68,33 +102,43 @@ export function initMCPListener(navigate?: (options: any) => void) {
       const store = useSceneEditorStore.getState();
 
       if (action === "create_canvas") {
-        const { width, height, backgroundColor, color } = payload;
+        const { width, height, backgroundColor, color } = payload || {};
         const newId = crypto.randomUUID();
         const w = width || 1080;
         const h = height || 1080;
-        if (navigate) {
-          void navigate({
+        if (activeNavigate) {
+          void activeNavigate({
             to: "/scene",
             search: { id: newId, w, h },
           });
         }
-        await store.load(newId, { w, h });
-        const bg = backgroundColor || color;
-        if (bg) {
-          store.applyCommands([{ type: "SET_ARTBOARD", bg: parseColor(bg) }]);
-        }
-        if (requestId) {
-          SubmitResponse(requestId, {
-            success: true,
-            id: newId,
-            message: "Canvas created and navigated to /scene",
-          });
+        try {
+          await store.load(newId, { w, h });
+          const bg = backgroundColor || color;
+          if (bg) {
+            store.applyCommands([{ type: "SET_ARTBOARD", bg: parseColor(bg) }]);
+          }
+          if (requestId) {
+            SubmitResponse(requestId, {
+              success: true,
+              id: newId,
+              message: "Canvas created and navigated to /scene",
+            });
+          }
+        } catch (err: any) {
+          if (requestId) {
+            SubmitResponse(requestId, {
+              success: false,
+              id: newId,
+              error: err?.message || String(err),
+            });
+          }
         }
         return;
       }
 
       if (action === "render_elements") {
-        const scene = store.scene;
+        const { store: activeStore, scene } = await getReadyScene();
         if (!scene) {
           if (requestId) {
             SubmitResponse(requestId, {
@@ -368,7 +412,7 @@ export function initMCPListener(navigate?: (options: any) => void) {
         }
 
         if (commands.length > 0) {
-          store.applyCommands(commands);
+          activeStore.applyCommands(commands);
         }
 
         if (requestId) {
@@ -394,7 +438,7 @@ export function initMCPListener(navigate?: (options: any) => void) {
       }
 
       if (action === "modify_elements") {
-        const scene = store.scene;
+        const { store: activeStore, scene } = await getReadyScene();
         if (!scene) {
           if (requestId) SubmitResponse(requestId, { error: "No active scene" });
           return;
@@ -500,7 +544,7 @@ export function initMCPListener(navigate?: (options: any) => void) {
         }
 
         if (commands.length > 0) {
-          store.applyCommands(commands);
+          activeStore.applyCommands(commands);
         }
 
         if (requestId) {
@@ -526,7 +570,7 @@ export function initMCPListener(navigate?: (options: any) => void) {
       }
 
       if (action === "get_canvas_summary" && requestId) {
-        const scene = store.scene;
+        const { scene } = await getReadyScene();
         if (!scene) {
           SubmitResponse(requestId, { error: "No active canvas scene" });
           return;
@@ -558,13 +602,13 @@ export function initMCPListener(navigate?: (options: any) => void) {
       }
 
       if (action === "get_canvas_state" && requestId) {
-        const scene = store.scene;
+        const { scene } = await getReadyScene();
         SubmitResponse(requestId, { scene });
         return;
       }
 
       if (action === "get_canvas_image" && requestId) {
-        const scene = store.scene;
+        const { scene } = await getReadyScene();
         if (!scene) {
           SubmitResponse(requestId, { error: "No active canvas scene" });
           return;
@@ -716,22 +760,30 @@ export function initMCPListener(navigate?: (options: any) => void) {
       }
     } catch (e: any) {
       console.error("Failed to handle MCP action:", e);
+      try {
+        const actionData = Array.isArray(data) ? data[0] : data;
+        if (actionData?.requestId) {
+          SubmitResponse(actionData.requestId, { error: e?.message || "Internal error handling MCP action" });
+        }
+      } catch {}
     }
   };
 
-  if (typeof window === "undefined") {
-    return () => {};
-  }
+  isSubscribed = true;
 
   if ((window as any).runtime?.EventsOnMultiple) {
-    return EventsOn("mcp:action", handler);
+    activeUnsub = EventsOn("mcp:action", handler);
+    return () => {
+      isSubscribed = false;
+      activeUnsub?.();
+      activeUnsub = undefined;
+    };
   }
 
-  let unsub: (() => void) | undefined;
   const interval = setInterval(() => {
     if ((window as any).runtime?.EventsOnMultiple) {
       clearInterval(interval);
-      unsub = EventsOn("mcp:action", handler);
+      activeUnsub = EventsOn("mcp:action", handler);
     }
   }, 100);
 
@@ -740,6 +792,8 @@ export function initMCPListener(navigate?: (options: any) => void) {
   return () => {
     clearInterval(interval);
     clearTimeout(timeout);
-    unsub?.();
+    isSubscribed = false;
+    activeUnsub?.();
+    activeUnsub = undefined;
   };
 }

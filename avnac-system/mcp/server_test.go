@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,7 +21,7 @@ func TestMCPServerDiscoverAndSSE(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	// Give the HTTP server a moment to bind
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	hosts := []string{"127.0.0.1", "localhost"}
 
@@ -63,6 +64,9 @@ func TestMCPServerDiscoverAndSSE(t *testing.T) {
 			if !ok || serverInfo["name"] != "Avnac Studio" {
 				t.Errorf("Expected serverInfo.name == 'Avnac Studio', got %v", serverInfo)
 			}
+			if protoVer, ok := probeResp.Result["protocolVersion"].(string); !ok || protoVer == "" {
+				t.Errorf("Expected non-empty protocolVersion")
+			}
 		})
 
 		t.Run("sse_connect_"+host, func(t *testing.T) {
@@ -83,8 +87,71 @@ func TestMCPServerDiscoverAndSSE(t *testing.T) {
 				t.Fatalf("Expected status 200 for SSE, got %d", resp.StatusCode)
 			}
 			contentType := resp.Header.Get("Content-Type")
-			if contentType != "text/event-stream" {
+			if !strings.HasPrefix(contentType, "text/event-stream") {
 				t.Errorf("Expected text/event-stream, got %s", contentType)
+			}
+		})
+
+		t.Run("streamable_initialize_"+host, func(t *testing.T) {
+			initReq := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      1,
+				"method":  "initialize",
+				"params": map[string]any{
+					"protocolVersion": "2024-11-05",
+					"clientInfo": map[string]any{
+						"name":    "test-client",
+						"version": "1.0.0",
+					},
+				},
+			}
+			data, _ := json.Marshal(initReq)
+
+			req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s:12345/", host), bytes.NewReader(data))
+			if err != nil {
+				t.Fatalf("Failed to create initialize request: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to post initialize on %s: %v", host, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("Expected status 200 for initialize, got %d (body: %s)", resp.StatusCode, string(body))
+			}
+
+			sessionID := resp.Header.Get("Mcp-Session-Id")
+			if sessionID == "" {
+				t.Errorf("Expected non-empty Mcp-Session-Id header")
+			}
+		})
+
+		t.Run("browser_status_page_"+host, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s:12345/", host), nil)
+			if err != nil {
+				t.Fatalf("Failed to create browser request: %v", err)
+			}
+			req.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to request browser page on %s: %v", host, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("Expected status 200 for browser page, got %d", resp.StatusCode)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			if !strings.Contains(string(body), "Avnac MCP Server is running") {
+				t.Errorf("Expected page body to mention server running, got %s", string(body))
 			}
 		})
 	}

@@ -407,14 +407,30 @@ func (m *AvnacMCP) RegisterTools(wailsCtx context.Context) {
 		Name:        "create_canvas",
 		Description: "Create a new canvas with the specified dimensions",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input CreateCanvasInput) (*mcp.CallToolResult, any, error) {
+		requestID := uuid.New().String()
+		ch := make(chan any, 1)
+
+		m.mu.Lock()
+		m.pendingRequests[requestID] = ch
+		m.mu.Unlock()
+
 		payload := map[string]any{
-			"action":  "create_canvas",
-			"payload": input,
+			"action":    "create_canvas",
+			"requestId": requestID,
+			"payload":   input,
 		}
 
 		runtime.EventsEmit(wailsCtx, "mcp:action", payload)
 
-		return nil, map[string]any{"message": "Navigation to new canvas initiated"}, nil
+		select {
+		case data := <-ch:
+			return nil, data, nil
+		case <-time.After(15 * time.Second):
+			m.mu.Lock()
+			delete(m.pendingRequests, requestID)
+			m.mu.Unlock()
+			return nil, nil, fmt.Errorf("timeout waiting for create_canvas completion")
+		}
 	})
 
 							mcp.AddTool(m.server, &mcp.Tool{
