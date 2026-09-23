@@ -25,6 +25,122 @@ function parseColor(input?: string): SaraswatiColor {
   return { type: "solid", color: input };
 }
 
+type MCPPaintInput = {
+  fill?: string;
+  color?: string;
+  gradientStops?: unknown;
+  gradientAngle?: unknown;
+};
+
+function normalizeGradientStops(input: unknown): Array<{ color: string; offset: number }> | null {
+  if (!Array.isArray(input)) return null;
+  const stops = input
+    .filter((s): s is { color: string; offset: number } => {
+      if (!s || typeof s !== "object") return false;
+      const rec = s as Record<string, unknown>;
+      return (
+        typeof rec.color === "string" &&
+        rec.color.length > 0 &&
+        typeof rec.offset === "number" &&
+        Number.isFinite(rec.offset)
+      );
+    })
+    .map((s) => ({
+      color: s.color,
+      offset: Math.min(1, Math.max(0, s.offset)),
+    }))
+    .sort((a, b) => a.offset - b.offset);
+  if (stops.length < 2) return null;
+  return stops;
+}
+
+function normalizeGradientAngle(input: unknown, fallback = 0): number {
+  if (typeof input === "number" && Number.isFinite(input)) return input;
+  const n = Number(input);
+  if (Number.isFinite(n)) return n;
+  return fallback;
+}
+
+function gradientCss(stops: Array<{ color: string; offset: number }>, angle: number): string {
+  const s = stops.map((stop) => `${stop.color} ${Math.round(stop.offset * 100)}%`).join(", ");
+  return `linear-gradient(${angle}deg, ${s})`;
+}
+
+function parsePaint(input: MCPPaintInput): SaraswatiColor {
+  const stops = normalizeGradientStops(input.gradientStops);
+  if (stops) {
+    const angle = normalizeGradientAngle(input.gradientAngle, 0);
+    return { type: "gradient", css: gradientCss(stops, angle), stops, angle };
+  }
+  return parseColor(input.fill ?? input.color);
+}
+
+function existingGradientAngle(fill: unknown, fallback = 0): number {
+  if (fill && typeof fill === "object") {
+    const rec = fill as Record<string, unknown>;
+    if (rec.type === "gradient" && typeof rec.angle === "number" && Number.isFinite(rec.angle)) {
+      return rec.angle as number;
+    }
+  }
+  return fallback;
+}
+
+function existingGradientStops(fill: unknown): Array<{ color: string; offset: number }> | null {
+  if (fill && typeof fill === "object") {
+    const rec = fill as Record<string, unknown>;
+    if (rec.type === "gradient" && Array.isArray(rec.stops)) {
+      return normalizeGradientStops(rec.stops);
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve a paint update for modify_elements.
+ * - gradientStops present + valid → new gradient (angle falls back to mod angle → existing angle → 0)
+ * - only gradientAngle present + existing is gradient → re-angle existing stops
+ * - fill/color present → solid (unless gradient above takes precedence)
+ * - otherwise → null (no paint change)
+ */
+function resolveModifyPaint(
+  mod: { fill?: string; color?: string; gradientStops?: unknown; gradientAngle?: unknown },
+  currentPaint: unknown,
+): SaraswatiColor | null {
+  const hasStopsField = mod.gradientStops !== undefined;
+  const hasAngleField = mod.gradientAngle !== undefined;
+  const hasSolidField = mod.fill !== undefined || mod.color !== undefined;
+
+  if (hasStopsField) {
+    const stops = normalizeGradientStops(mod.gradientStops);
+    if (stops) {
+      const angle = normalizeGradientAngle(
+        mod.gradientAngle,
+        existingGradientAngle(currentPaint, 0),
+      );
+      return { type: "gradient", css: gradientCss(stops, angle), stops, angle };
+    }
+    // Invalid stops array: fall through to solid if provided, else no change.
+    if (hasSolidField) return parseColor(mod.fill ?? mod.color);
+    return null;
+  }
+
+  if (hasAngleField) {
+    const currentStops = existingGradientStops(currentPaint);
+    if (currentStops) {
+      const angle = normalizeGradientAngle(mod.gradientAngle, existingGradientAngle(currentPaint, 0));
+      return { type: "gradient", css: gradientCss(currentStops, angle), stops: currentStops, angle };
+    }
+    if (hasSolidField) return parsePaint(mod as MCPPaintInput);
+    return null;
+  }
+
+  if (hasSolidField) {
+    // parsePaint also covers the case where solid + gradient arrive together (gradient wins).
+    return parsePaint(mod as MCPPaintInput);
+  }
+  return null;
+}
+
 const NO_SCENE_ERROR = "No active canvas scene. Call create_canvas first.";
 
 function normalizeTextAlign(input: unknown): "left" | "center" | "right" {
@@ -187,57 +303,63 @@ export function initMCPListener(navigate?: (options: any) => void) {
         };
         try {
           if (activeNavigate) {
-            // Single-writer path: navigate and let the /scene route perform
-            // the one initial load+write, then apply title/background on top.
+            // Single-writer path: navigate with name so the /scene route's
+            // single load+write creates the row atomically with the title.
             // (Calling store.load() here as well would write the same new
             // workspace twice concurrently.)
             void activeNavigate({
               to: "/scene",
-              search: { id: newId, w, h },
+              search: { id: newId, w, h, name: title || undefined },
             });
             const ready = await waitForDocument(newId);
             if (!ready.ok) {
               respondError(`Failed to load: ${ready.error}`);
               return;
             }
-            const fresh = useSceneEditorStore.getState();
-            if (title) {
-              fresh.setDocumentName(title);
-              await fresh.commitDocumentName();
+            // Belt-and-suspenders: if the route loaded without the name
+            // (e.g. older route cached), apply it now.
+            let done = useSceneEditorStore.getState();
+            if (title && done.documentName !== title) {
+              done.setDocumentName(title);
+              await useSceneEditorStore.getState().commitDocumentName();
+              done = useSceneEditorStore.getState();
             }
             if (bg) {
-              fresh.applyCommands([{ type: "SET_ARTBOARD", bg: parseColor(bg) }]);
+              done.applyCommands([{ type: "SET_ARTBOARD", bg: parseColor(bg) }]);
             }
             if (requestId) {
-              const done = useSceneEditorStore.getState();
+              done = useSceneEditorStore.getState();
+              const persistedName = done.documentName || "Untitled";
               SubmitResponse(requestId, {
-                success: true,
+                success: !title || persistedName === title,
                 id: newId,
-                name: title || done.documentName || "Untitled",
+                name: persistedName,
                 width: done.scene?.artboard.width ?? w,
                 height: done.scene?.artboard.height ?? h,
                 message: title
-                  ? `Canvas '${title}' created and navigated to /scene`
+                  ? `Canvas '${persistedName}' created and navigated to /scene`
                   : "Canvas created and navigated to /scene",
               });
             }
           } else {
             // Fallback when no router is wired (tests): direct single load.
-            await store.load(newId, { w, h });
-            const fresh = useSceneEditorStore.getState();
-            if (title) {
+            await store.load(newId, { w, h, name: title || undefined });
+            let fresh = useSceneEditorStore.getState();
+            if (title && fresh.documentName !== title) {
               fresh.setDocumentName(title);
-              await fresh.commitDocumentName();
+              await useSceneEditorStore.getState().commitDocumentName();
+              fresh = useSceneEditorStore.getState();
             }
             if (bg) {
               fresh.applyCommands([{ type: "SET_ARTBOARD", bg: parseColor(bg) }]);
             }
             if (requestId) {
               const done = useSceneEditorStore.getState();
+              const persistedName = done.documentName || "Untitled";
               SubmitResponse(requestId, {
-                success: true,
+                success: !title || persistedName === title,
                 id: newId,
-                name: title || done.documentName || "Untitled",
+                name: persistedName,
                 width: done.scene?.artboard.width ?? w,
                 height: done.scene?.artboard.height ?? h,
                 message: "Canvas created",
@@ -286,7 +408,7 @@ export function initMCPListener(navigate?: (options: any) => void) {
           const rotation = el.rotation ?? el.angle ?? 0;
           const opacity = el.opacity ?? 1;
           const blur = el.blur ?? 0;
-          const fill = parseColor(el.fill ?? el.color);
+          const fill = parsePaint(el);
 
           let shadow: SaraswatiShadow | null = null;
           if (el.shadow) {
@@ -417,7 +539,7 @@ export function initMCPListener(navigate?: (options: any) => void) {
               y1: el.y1 ?? y,
               x2: el.x2 ?? x + width,
               y2: el.y2 ?? y,
-              stroke: parseColor(lineStroke),
+              stroke: parsePaint({ fill: lineStroke, gradientStops: el.gradientStops, gradientAngle: el.gradientAngle }),
               strokeWidth: el.strokeWidth ?? 2,
               arrowStart: false,
               arrowEnd: false,
@@ -598,9 +720,40 @@ export function initMCPListener(navigate?: (options: any) => void) {
             commands.push({ type: "SET_NODE_OPACITY", id: mod.objectId, opacity: mod.opacity });
           }
 
-          if (mod.fill !== undefined || mod.color !== undefined) {
-            const fill = parseColor(mod.fill ?? mod.color);
-            commands.push({ type: "SET_NODE_FILL", id: mod.objectId, fill });
+          const hasPaintFields =
+            mod.fill !== undefined ||
+            mod.color !== undefined ||
+            mod.gradientStops !== undefined ||
+            mod.gradientAngle !== undefined;
+          let pendingPaint: SaraswatiColor | null = null;
+          let lineStrokeDone = false;
+          if (hasPaintFields) {
+            const currentPaint =
+              node.type === "text"
+                ? (node as any).color
+                : node.type === "line"
+                  ? (node as any).stroke
+                  : (node as any).fill;
+            pendingPaint = resolveModifyPaint(mod, currentPaint);
+            if (pendingPaint) {
+              if (node.type === "text") {
+                // Applied via SET_TEXT_FORMAT below.
+              } else if (node.type === "line") {
+                commands.push({
+                  type: "SET_NODE_STROKE",
+                  id: mod.objectId,
+                  stroke: pendingPaint,
+                  strokeWidth: mod.strokeWidth ?? (node as any).strokeWidth ?? 2,
+                });
+                pendingPaint = null;
+                lineStrokeDone = true;
+              } else if (node.type !== "image" && node.type !== "group") {
+                commands.push({ type: "SET_NODE_FILL", id: mod.objectId, fill: pendingPaint });
+                pendingPaint = null;
+              } else {
+                pendingPaint = null;
+              }
+            }
           }
 
           const rad = mod.cornerRadius ?? mod.radius;
@@ -652,7 +805,10 @@ export function initMCPListener(navigate?: (options: any) => void) {
             if (mod.textAlign !== undefined) formatPatch.textAlign = normalizeTextAlign(mod.textAlign);
             if (mod.lineHeight !== undefined) formatPatch.lineHeight = mod.lineHeight;
             if (mod.underline !== undefined) formatPatch.underline = Boolean(mod.underline);
-            if (mod.color !== undefined || mod.fill !== undefined) {
+            if (pendingPaint) {
+              formatPatch.color = pendingPaint;
+              pendingPaint = null;
+            } else if (mod.color !== undefined || mod.fill !== undefined) {
               formatPatch.color = parseColor(mod.color ?? mod.fill);
             }
             if (Object.keys(formatPatch).length > 0) {
@@ -671,7 +827,9 @@ export function initMCPListener(navigate?: (options: any) => void) {
               });
             }
           } else if (mod.stroke !== undefined || mod.strokeWidth !== undefined) {
-            if (node.type !== "group" && node.type !== "image") {
+            if (lineStrokeDone) {
+              // Gradient stroke already applied above (includes strokeWidth fallback) — skip duplicate.
+            } else if (node.type !== "group" && node.type !== "image") {
               commands.push({
                 type: "SET_NODE_STROKE",
                 id: mod.objectId,
