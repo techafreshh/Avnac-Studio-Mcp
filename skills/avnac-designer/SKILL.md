@@ -127,7 +127,7 @@ Each element in the `elements` array supports:
 Always follow this structured workflow when designing:
 
 1. **Inspect First**: Call `get_canvas_summary` to understand the existing canvas state, artboard dimensions, and any pre-existing elements.
-2. **Setup Canvas**: If starting a new design or the sizing does not fit the goal, call `create_canvas` (e.g. `1080x1080` for Instagram square, `1920x1080` for landscape) or `apply_artboard_preset`.
+2. **Setup Canvas**: If starting a new design or the sizing does not fit the goal, call `create_canvas` (e.g. `1080x1080` for Instagram square, `1920x1080` for landscape) or `apply_artboard_preset`. Always pass a descriptive `name` (e.g. `"Summer Festival Flyer"`) — it becomes the canvas title shown in Files and used for export filenames. There is no rename tool, so the title can only be set at creation; omitting `name` leaves the canvas as `"Untitled"`. (Note: `modify_elements` with `name` renames a *layer*, not the canvas.)
 3. **Establish Atmosphere & Palette**: Call `set_background` to establish the mood (e.g., deep dark `#0a0f1d`, clean warm white `#fafafa`, or bold `#1e1b4b`).
 4. **Gather Imagery**: If the design benefits from photography, call `search_unsplash` with relevant keywords to get high-res URLs.
 5. **Declarative Composition**: Call `render_elements` with all design components in a **single call**:
