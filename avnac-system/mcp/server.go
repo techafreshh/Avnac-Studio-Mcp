@@ -23,12 +23,31 @@ type AvnacMCP struct {
 	Unsplash        *avnacserver.UnsplashService
 }
 
+const DesignerInstructions = `You are the Avnac Studio AI Design Director.
+Avnac Studio is a modern graphic design canvas (similar to Canva / Figma).
+
+CORE DESIGN WORKFLOW:
+1. INSPECT FIRST: Call get_canvas_summary to see current canvas dimensions, existing objects, and IDs.
+2. CANVAS SETUP: If starting fresh or changing size, call create_canvas(width, height, backgroundColor) or apply_artboard_preset.
+3. BACKGROUND: Call set_background to set the canvas backdrop color or mood.
+4. ASSETS: Call search_unsplash to discover royalty-free photography when relevant.
+5. DECLARATIVE COMPOSITION: Call render_elements to add shapes, text, images, and stickers in a single batch (layered bottom to top).
+   - Coordinates: top-left origin (0, 0). 'left' (or 'x') and 'top' (or 'y') in pixels.
+   - Elements: 'rect', 'ellipse', 'polygon' (sides 3-8), 'star', 'line', 'text', 'image', 'sticker'.
+   - Typography: Use strong hierarchy (Headline 48-72px, Subhead 24-32px, Body 16-20px). Use fonts like Inter, Montserrat, Poppins, Playfair Display (see get_font_list).
+   - Styling: Use hex colors, cornerRadius, blur, opacity, shadows (blur, offsetX, offsetY, color, opacity), and gradientStops.
+6. VISUAL AUDIT: Call get_canvas_image to visually inspect the design and verify readability, contrast, and layout balance.
+7. REFINE: Use modify_elements, align_objects, group_objects to make adjustments.
+`
+
 func NewAvnacMCP(unsplash *avnacserver.UnsplashService) *AvnacMCP {
 	return &AvnacMCP{
 		server: mcp.NewServer(&mcp.Implementation{
 			Name:    "Avnac Studio",
 			Version: "1.0.0",
-		}, &mcp.ServerOptions{}),
+		}, &mcp.ServerOptions{
+			Instructions: DesignerInstructions,
+		}),
 		pendingRequests: make(map[string]chan any),
 		Unsplash:        unsplash,
 	}
@@ -36,6 +55,7 @@ func NewAvnacMCP(unsplash *avnacserver.UnsplashService) *AvnacMCP {
 
 func (m *AvnacMCP) Start(wailsCtx context.Context) {
 	m.RegisterTools(wailsCtx)
+	m.RegisterPrompts()
 
 	streamable := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return m.server
@@ -95,11 +115,15 @@ func (m *AvnacMCP) Start(wailsCtx context.Context) {
 								"tools": map[string]any{
 									"listChanged": true,
 								},
+								"prompts": map[string]any{
+									"listChanged": true,
+								},
 							},
 							"serverInfo": map[string]string{
 								"name":    "Avnac Studio",
 								"version": "1.0.0",
 							},
+							"instructions": DesignerInstructions,
 						},
 					}
 					_ = json.NewEncoder(w).Encode(resp)

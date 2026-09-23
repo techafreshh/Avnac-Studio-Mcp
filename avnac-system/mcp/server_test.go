@@ -132,6 +132,35 @@ func TestMCPServerDiscoverAndSSE(t *testing.T) {
 			}
 		})
 
+		t.Run("prompts_list_"+host, func(t *testing.T) {
+			listReq := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      2,
+				"method":  "prompts/list",
+				"params":  map[string]any{},
+			}
+			data, _ := json.Marshal(listReq)
+
+			req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("http://%s:12345/", host), bytes.NewReader(data))
+			if err != nil {
+				t.Fatalf("Failed to create prompts/list request: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to post prompts/list on %s: %v", host, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("Expected status 200 for prompts/list, got %d (body: %s)", resp.StatusCode, string(body))
+			}
+		})
+
 		t.Run("browser_status_page_"+host, func(t *testing.T) {
 			req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s:12345/", host), nil)
 			if err != nil {
