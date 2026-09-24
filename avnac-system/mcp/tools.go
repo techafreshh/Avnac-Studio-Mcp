@@ -797,6 +797,85 @@ type GetObjectPropertiesInput struct {
 	ObjectID string `json:"objectId"`
 }
 
+type OpenCanvasInput struct {
+	// The workspace id of the saved file to open, as returned by list_files
+	FileID string `json:"fileId"`
+}
+
+type RenameFileInput struct {
+	// The workspace id of the saved file to rename, as returned by list_files
+	FileID string `json:"fileId"`
+	// The new name for the file
+	Name string `json:"name"`
+}
+
+// workspaceMeta is the compact file entry surfaced by list_files and used to
+// pre-validate open_canvas / rename_file ids without a frontend round-trip.
+type workspaceMeta struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	UpdatedAt      int64  `json:"updatedAt"`
+	ArtboardWidth  int    `json:"artboardWidth"`
+	ArtboardHeight int    `json:"artboardHeight"`
+}
+
+// listWorkspaceMetas reads the saved workspace list from the IOManager.
+// Returns an error when the IO layer is not initialized yet (app starting).
+func (m *AvnacMCP) listWorkspaceMetas() ([]workspaceMeta, error) {
+	if m.IO == nil {
+		return nil, fmt.Errorf("workspace storage not initialised yet")
+	}
+	raw, err := m.IO.ListDocuments()
+	if err != nil {
+		return nil, err
+	}
+	var metas []workspaceMeta
+	if err := json.Unmarshal([]byte(raw), &metas); err != nil {
+		return nil, fmt.Errorf("decode document list: %w", err)
+	}
+	return metas, nil
+}
+
+func findWorkspaceMeta(metas []workspaceMeta, fileID string) *workspaceMeta {
+	for i := range metas {
+		if metas[i].ID == fileID {
+			return &metas[i]
+		}
+	}
+	return nil
+}
+
+func decodeOpenCanvasInput(raw map[string]any) (OpenCanvasInput, error) {
+	var out OpenCanvasInput
+	if raw == nil {
+		return out, fmt.Errorf("missing input: expected {fileId}")
+	}
+	id := stringField(raw, "fileId", "id", "workspaceId", "fileID")
+	if id == "" {
+		return out, fmt.Errorf("fileId is required (from list_files)")
+	}
+	out.FileID = id
+	return out, nil
+}
+
+func decodeRenameFileInput(raw map[string]any) (RenameFileInput, error) {
+	var out RenameFileInput
+	if raw == nil {
+		return out, fmt.Errorf("missing input: expected {fileId, name}")
+	}
+	id := stringField(raw, "fileId", "id", "workspaceId", "fileID")
+	if id == "" {
+		return out, fmt.Errorf("fileId is required (from list_files)")
+	}
+	name := stringField(raw, "name", "title", "filename")
+	if name == "" {
+		return out, fmt.Errorf("name is required")
+	}
+	out.FileID = id
+	out.Name = name
+	return out, nil
+}
+
 func (m *AvnacMCP) RegisterTools(wailsCtx context.Context) {
 	mcp.AddTool(m.server, &mcp.Tool{
 		Name: "render_elements",
@@ -937,7 +1016,29 @@ func (m *AvnacMCP) RegisterTools(wailsCtx context.Context) {
 			return nil, nil, err
 		}
 
-		return nil, result, nil
+		// Project to the fields agents actually use: id, alt text, native
+		// size, photographer, and the two render-ready URLs. Dropping long
+		// descriptions, download/link blocks, and full-size URLs keeps each
+		// query's output small in the caller's context window.
+		photos := make([]map[string]any, 0, len(result.Photos))
+		for _, p := range result.Photos {
+			alt := ""
+			if p.AltDescription != nil {
+				alt = *p.AltDescription
+			}
+			photos = append(photos, map[string]any{
+				"id":             p.ID,
+				"alt_description": alt,
+				"width":          p.Width,
+				"height":         p.Height,
+				"photographer":   p.User.Name,
+				"urls": map[string]string{
+					"small":   p.Urls.Small,
+					"regular": p.Urls.Regular,
+				},
+			})
+		}
+		return nil, map[string]any{"photos": photos, "hasMore": result.HasMore}, nil
 	})
 
 		mcp.AddTool(m.server, &mcp.Tool{
@@ -1071,6 +1172,85 @@ func (m *AvnacMCP) RegisterTools(wailsCtx context.Context) {
 			m.mu.Unlock()
 			return nil, nil, fmt.Errorf("timeout waiting for create_canvas completion")
 		}
+	})
+
+	mcp.AddTool(m.server, &mcp.Tool{
+		Name:        "list_files",
+		Description: "List all saved canvas files with their workspace ids, names, dimensions, and last-updated time. Use before open_canvas when the user references an existing file that is not currently open.",
+		InputSchema: emptyObjSchema(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, raw map[string]any) (*mcp.CallToolResult, any, error) {
+		metas, err := m.listWorkspaceMetas()
+		if err != nil {
+			return nil, nil, err
+		}
+		files := make([]map[string]any, 0, len(metas))
+		for _, meta := range metas {
+			files = append(files, map[string]any{
+				"id":        meta.ID,
+				"name":      meta.Name,
+				"width":     meta.ArtboardWidth,
+				"height":    meta.ArtboardHeight,
+				"updatedAt": meta.UpdatedAt,
+			})
+		}
+		return nil, map[string]any{"files": files, "count": len(files)}, nil
+	})
+
+	mcp.AddTool(m.server, &mcp.Tool{
+		Name:        "open_canvas",
+		Description: "Open a saved canvas file by workspace id (from list_files), navigate the editor to it, and make it the active scene. Returns the opened file's name and dimensions or an unknown-id error.",
+		InputSchema: objSchema(map[string]*jsonschema.Schema{
+			"fileId":     desc("Workspace id of the file to open, as returned by list_files."),
+			"id":         desc("Alias for fileId."),
+			"workspaceId": desc("Alias for fileId."),
+		}),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, raw map[string]any) (*mcp.CallToolResult, any, error) {
+		input, err := decodeOpenCanvasInput(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Pre-validate against storage so unknown ids fail fast with a
+		// helpful error instead of the /scene route silently creating a
+		// brand-new workspace for the unknown id.
+		metas, err := m.listWorkspaceMetas()
+		if err != nil {
+			return nil, nil, err
+		}
+		if findWorkspaceMeta(metas, input.FileID) == nil {
+			return nil, nil, fmt.Errorf("no saved file with id '%s'. Call list_files to see available canvases", input.FileID)
+		}
+		data, err := m.emitSync(wailsCtx, "open_workspace", input, 30*time.Second)
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, data, nil
+	})
+
+	mcp.AddTool(m.server, &mcp.Tool{
+		Name:        "rename_file",
+		Description: "Rename a saved canvas file by workspace id (from list_files). Renames the file in storage and, if it is currently open, the live editor title too.",
+		InputSchema: objSchema(map[string]*jsonschema.Schema{
+			"fileId": desc("Workspace id of the file to rename, as returned by list_files."),
+			"id":     desc("Alias for fileId."),
+			"name":   desc("New file name."),
+		}, "fileId", "name"),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, raw map[string]any) (*mcp.CallToolResult, any, error) {
+		input, err := decodeRenameFileInput(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+		metas, err := m.listWorkspaceMetas()
+		if err != nil {
+			return nil, nil, err
+		}
+		if findWorkspaceMeta(metas, input.FileID) == nil {
+			return nil, nil, fmt.Errorf("no saved file with id '%s'. Call list_files to see available canvases", input.FileID)
+		}
+		data, err := m.emitSync(wailsCtx, "rename_workspace", input, 15*time.Second)
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, data, nil
 	})
 
 							mcp.AddTool(m.server, &mcp.Tool{
@@ -1307,7 +1487,7 @@ func (m *AvnacMCP) RegisterTools(wailsCtx context.Context) {
 		select {
 		case data := <-ch:
 			return nil, data, nil
-		case <-time.After(5 * time.Second):
+		case <-time.After(15 * time.Second):
 			m.mu.Lock()
 			delete(m.pendingRequests, requestID)
 			m.mu.Unlock()
@@ -1335,7 +1515,7 @@ func (m *AvnacMCP) RegisterTools(wailsCtx context.Context) {
 		select {
 		case data := <-ch:
 			return nil, data, nil
-		case <-time.After(5 * time.Second):
+		case <-time.After(15 * time.Second):
 			m.mu.Lock()
 			delete(m.pendingRequests, requestID)
 			m.mu.Unlock()
@@ -1363,7 +1543,7 @@ func (m *AvnacMCP) RegisterTools(wailsCtx context.Context) {
 		select {
 		case data := <-ch:
 			return nil, data, nil
-		case <-time.After(5 * time.Second):
+		case <-time.After(15 * time.Second):
 			m.mu.Lock()
 			delete(m.pendingRequests, requestID)
 			m.mu.Unlock()
@@ -1391,7 +1571,7 @@ func (m *AvnacMCP) RegisterTools(wailsCtx context.Context) {
 		select {
 		case data := <-ch:
 			return nil, data, nil
-		case <-time.After(5 * time.Second):
+		case <-time.After(15 * time.Second):
 			m.mu.Lock()
 			delete(m.pendingRequests, requestID)
 			m.mu.Unlock()

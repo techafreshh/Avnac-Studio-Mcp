@@ -1,8 +1,14 @@
 package mcp
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	avnacio "Avnac/avnac-system/io"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
@@ -193,5 +199,105 @@ func TestExplicitSchemasDocumented(t *testing.T) {
 	}
 	if _, ok := s.Properties["elements"]; !ok {
 		t.Fatalf("properties not preserved")
+	}
+}
+
+func TestDecodeOpenCanvasInput(t *testing.T) {
+	out, err := decodeOpenCanvasInput(map[string]any{"fileId": "abc-123"})
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if out.FileID != "abc-123" {
+		t.Errorf("fileId lost: %+v", out)
+	}
+
+	// Alias: id.
+	out, err = decodeOpenCanvasInput(map[string]any{"id": "xyz"})
+	if err != nil {
+		t.Fatalf("decode alias failed: %v", err)
+	}
+	if out.FileID != "xyz" {
+		t.Errorf("alias id not honored: %+v", out)
+	}
+
+	if _, err := decodeOpenCanvasInput(map[string]any{}); err == nil {
+		t.Fatalf("expected error for missing fileId")
+	}
+}
+
+func TestDecodeRenameFileInput(t *testing.T) {
+	out, err := decodeRenameFileInput(map[string]any{"fileId": "abc-123", "name": "Summer Flyer"})
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if out.FileID != "abc-123" || out.Name != "Summer Flyer" {
+		t.Errorf("fields lost: %+v", out)
+	}
+
+	// Alias: title for name.
+	out, err = decodeRenameFileInput(map[string]any{"id": "xyz", "title": "Poster v2"})
+	if err != nil {
+		t.Fatalf("decode alias failed: %v", err)
+	}
+	if out.FileID != "xyz" || out.Name != "Poster v2" {
+		t.Errorf("aliases not honored: %+v", out)
+	}
+
+	if _, err := decodeRenameFileInput(map[string]any{"fileId": "abc"}); err == nil {
+		t.Fatalf("expected error for missing name")
+	}
+	if _, err := decodeRenameFileInput(map[string]any{"name": "No id"}); err == nil {
+		t.Fatalf("expected error for missing fileId")
+	}
+}
+
+func TestFindWorkspaceMeta(t *testing.T) {
+	metas := []workspaceMeta{
+		{ID: "aaa", Name: "First"},
+		{ID: "bbb", Name: "Second"},
+	}
+	if findWorkspaceMeta(metas, "bbb") == nil {
+		t.Fatalf("expected to find bbb")
+	}
+	if findWorkspaceMeta(metas, "zzz") != nil {
+		t.Fatalf("expected nil for unknown id")
+	}
+}
+
+func TestListWorkspaceMetasViaIOManager(t *testing.T) {
+	appDir := t.TempDir()
+	docsDir := filepath.Join(appDir, "documents", "test-canvas")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	meta := map[string]any{
+		"id":             "test-canvas",
+		"name":           "Smoke Test Canvas",
+		"updatedAt":      time.Now().UnixMilli(),
+		"artboardWidth":  1920,
+		"artboardHeight": 1080,
+	}
+	raw, _ := json.Marshal(meta)
+	if err := os.WriteFile(filepath.Join(docsDir, "meta.json"), raw, 0o644); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+
+	io := avnacio.NewIOManager()
+	io.Startup(context.Background(), appDir)
+	m := NewAvnacMCP(nil, io)
+
+	metas, err := m.listWorkspaceMetas()
+	if err != nil {
+		t.Fatalf("listWorkspaceMetas failed: %v", err)
+	}
+	if len(metas) != 1 || metas[0].ID != "test-canvas" || metas[0].Name != "Smoke Test Canvas" {
+		t.Fatalf("unexpected metas: %+v", metas)
+	}
+	if metas[0].ArtboardWidth != 1920 || metas[0].ArtboardHeight != 1080 {
+		t.Fatalf("dimensions lost: %+v", metas[0])
+	}
+
+	if findWorkspaceMeta(metas, "test-canvas") == nil {
+		t.Fatalf("expected open_canvas pre-check to find test-canvas")
 	}
 }

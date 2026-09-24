@@ -13,7 +13,7 @@ import (
 )
 
 func TestMCPServerDiscoverAndSSE(t *testing.T) {
-	server := NewAvnacMCP(nil)
+	server := NewAvnacMCP(nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

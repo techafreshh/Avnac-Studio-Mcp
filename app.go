@@ -34,14 +34,15 @@ func NewApp() *App {
 	rembg := avnacserver.NewRembgService()
 	proxy := avnacserver.NewMediaProxy(cfgMgr.Get())
 	cfgMgr.AddWatcher(proxy.UpdateConfig)
+	ioManager := avnacio.NewIOManager()
 	return &App{
 		Config:     cfgMgr,
 		Secrets:    secrets,
-		ioManager:  avnacio.NewIOManager(),
+		ioManager:  ioManager,
 		Unsplash:   unsplash,
 		Rembg:      rembg,
 		mediaProxy: proxy,
-		MCPServer:  mcp.NewAvnacMCP(unsplash),
+		MCPServer:  mcp.NewAvnacMCP(unsplash, ioManager),
 	}
 }
 

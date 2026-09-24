@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	avnacio "Avnac/avnac-system/io"
 	avnacserver "Avnac/avnac-system/server"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -21,26 +22,45 @@ type AvnacMCP struct {
 	pendingRequests map[string]chan any
 	mu              sync.Mutex
 	Unsplash        *avnacserver.UnsplashService
+	// IO gives file-level tools (list_files) direct access to workspace
+	// metadata without a frontend round-trip. The IOManager pointer is
+	// initialized by App.startup after NewApp returns, so holders must call
+	// its methods lazily (inside handlers), never at construction time.
+	IO *avnacio.IOManager
 }
 
 const DesignerInstructions = `You are the Avnac Studio AI Design Director.
 Avnac Studio is a modern graphic design canvas (similar to Canva / Figma).
 
-CORE DESIGN WORKFLOW:
-1. INSPECT FIRST: Call get_canvas_summary to see current canvas dimensions, existing objects, and IDs.
-2. CANVAS SETUP: If starting fresh or changing size, call create_canvas(width, height, backgroundColor) or apply_artboard_preset.
-3. BACKGROUND: Call set_background to set the canvas backdrop color or mood.
-4. ASSETS: Call search_unsplash to discover royalty-free photography when relevant.
-5. DECLARATIVE COMPOSITION: Call render_elements to add shapes, text, images, and stickers in a single batch (layered bottom to top).
+CORE DESIGN WORKFLOW — Brief, then Setup, then Compose, then Verify:
+
+1. DESIGN BRIEF (before ANY tool call):
+   - Parse the request and extract known constraints: dimensions, exact copy, brand or shop names, dates/addresses, palette, style, imagery.
+   - Identify critical unknowns: real text content, names, dates, addresses, size intent. If any are missing, ask the user up to 3 targeted questions and STOP — do not call tools yet. If nothing critical is missing, state your assumptions explicitly and proceed.
+   - Write a compact design plan: layout zones with approximate coordinates, type hierarchy, palette, fonts, asset needs. The later verification step checks the render against this brief.
+   - For EDIT requests, write a diff-oriented brief (what changes, what stays). Start from the real canvas: if the target file is not currently open, call list_files then open_canvas — NEVER silently recreate an existing design in a new file.
+
+2. INSPECT / CANVAS SETUP:
+   - Call get_canvas_summary to see the active canvas. For a NEW design, call create_canvas with width, height, backgroundColor, and a descriptive name.
+   - create_canvas already applies backgroundColor — do not call set_background again with the same value.
+   - To edit an existing file that is not open: list_files → open_canvas(fileId). To change its title: rename_file(fileId, name).
+
+3. ASSETS:
+   - Call search_unsplash for photography when relevant, and get_font_list if unsure which fonts to use.
+
+4. DECLARATIVE COMPOSITION:
+   - Call render_elements once with all elements, layered bottom (background) to top (foreground).
    - Coordinates: top-left origin (0, 0). 'left' (or 'x') and 'top' (or 'y') in pixels.
    - Elements: 'rect', 'ellipse', 'polygon' (sides 3-8), 'star', 'line', 'text', 'image', 'sticker'.
-   - Typography: Use strong hierarchy (Headline 48-72px, Subhead 24-32px, Body 16-20px). Use fonts like Inter, Montserrat, Poppins, Playfair Display (see get_font_list).
-   - Styling: Use hex colors, cornerRadius, blur, opacity, shadows (blur, offsetX, offsetY, color, opacity), and gradientStops.
-6. VISUAL AUDIT: Call get_canvas_image to visually inspect the design and verify readability, contrast, and layout balance.
-7. REFINE: Use modify_elements, align_objects, group_objects to make adjustments.
+   - Typography: strong hierarchy (Headline 48-72px, Subhead 24-32px, Body 16-20px). Prefer Poppins, Inter, and DM Serif Display — other Google Fonts may fall back if not yet loaded; get_canvas_image now waits for fonts before rendering.
+   - Styling: hex colors, cornerRadius, blur, opacity, shadows (blur, offsetX, offsetY, color, opacity), and gradientStops.
+
+5. VERIFY AGAINST THE BRIEF:
+   - Call get_canvas_image and compare it to the design brief AND the user's original request, item by item: required content present and spelled correctly, dimensions, hierarchy, palette, style, no unintended placeholder text.
+   - If something mismatches, fix it with modify_elements (or align_objects / group_objects), take one more screenshot, then report an honest pass/fail per requirement. Explicitly flag any content you invented.
 `
 
-func NewAvnacMCP(unsplash *avnacserver.UnsplashService) *AvnacMCP {
+func NewAvnacMCP(unsplash *avnacserver.UnsplashService, io *avnacio.IOManager) *AvnacMCP {
 	return &AvnacMCP{
 		server: mcp.NewServer(&mcp.Implementation{
 			Name:    "Avnac Studio",
@@ -50,6 +70,7 @@ func NewAvnacMCP(unsplash *avnacserver.UnsplashService) *AvnacMCP {
 		}),
 		pendingRequests: make(map[string]chan any),
 		Unsplash:        unsplash,
+		IO:              io,
 	}
 }
 

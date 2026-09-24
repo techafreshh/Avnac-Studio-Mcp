@@ -14,48 +14,43 @@ The MCP server allows external AI agents and clients to interact with the Avnac 
 
 ## Available Tools
 
-The MCP server provides a comprehensive suite of tools for canvas automation:
+The MCP server provides 27 tools for canvas automation. Tool names equal their emitted `mcp:action` action strings 1:1, except `open_canvas`/`rename_file`, which emit `open_workspace`/`rename_workspace` (the frontend handler also keys on those).
 
-### 1. Context & Inspection
-- `list_objects`: Lists all objects on the canvas.
+### 1. File Management (no canvas required)
+- `list_files`: Lists all saved canvas files (`id`, `name`, width, height, `updatedAt`) from workspace storage.
+- `open_canvas`: Opens a saved file by workspace id and makes it the active scene (emits `open_workspace`; pre-validates the id in Go).
+- `rename_file`: Renames a saved file (emits `rename_workspace`), also updating the live editor title when open.
+
+### 2. Context & Inspection
+- `get_canvas_summary`: Token-efficient semantic summary of artboard + objects.
+- `list_objects`: Lists all objects with raw IDs.
 - `get_selection`: Returns the current selection.
-- `get_canvas_state`: Returns the full Fabric.js JSON state.
-- `get_canvas_image`: Returns a visual screenshot of the current canvas.
+- `get_canvas_state`: Returns the full scene state.
+- `get_canvas_image`: Returns a visual PNG screenshot of the canvas (or one object).
 - `get_object_properties`: Returns detailed properties of a specific object.
 - `get_font_list`: Returns supported Google Fonts.
 
-### 2. Creation
-- `create_canvas`: Navigates to the editor and initializes a new artboard.
-- `add_shape`: Adds rectangles, circles, triangles, stars, or polygons.
-- `add_line`: Adds a line between two points.
-- `add_text`: Adds an interactive text object.
-- `add_image`: Adds an image from a URL.
-- `add_sticker`: Adds a built-in sticker asset (e.g., 'donut', 'pineapple').
+### 3. Creation
+- `create_canvas`: Navigates to the editor and initializes a new artboard (width, height, optional name/background).
+- `render_elements`: Declaratively creates a batch of elements (`rect`, `ellipse`, `polygon`, `star`, `line`, `text`, `image`, `sticker`) in one call, bottom-to-top layering.
 
-### 3. Manipulation & Styling
-- `update_object` / `update_text`: Modifies object properties or text content.
-- `delete_object`: Removes objects from the canvas.
-- `lock_object`: Prevents selection and movement of an object.
-- `rename_layer`: Assigns a custom name to a layer.
-- `set_blur`: Applies Gaussian blur to an object.
-- `set_corner_radius`: Rounds corners of rectangles or images.
-- `apply_shadow`: Adds a customizable drop shadow.
-- `apply_gradient`: Applies a linear gradient fill.
+### 4. Manipulation & Styling
+- `modify_elements`: Batch-updates element properties by objectId (fill, text controls, shadow, gradients, z-order `action`).
+- `delete_object`: Removes an object (or the current selection).
+- `set_background`: Changes the artboard background color.
+- `apply_artboard_preset`: Quickly resizes to standard sizes (IG, X, HD, A4).
 
-### 4. Layout & Organization
+### 5. Layout & Organization
 - `select_objects`: Programmatically selects objects by ID.
 - `group_objects` / `ungroup_objects`: Manages object hierarchy.
 - `align_objects`: Aligns objects to the artboard or each other.
 - `distribute_objects`: Evenly spaces objects horizontally or vertically.
 - `fit_to_artboard`: Scales objects to fill the canvas area.
-- `arrange_z_index`: Moves objects forward/backward in the layer stack.
 
-### 5. Utilities & Assets
-- `set_background`: Changes the artboard background color.
-- `clear_canvas`: Resets the workspace.
-- `search_unsplash`: Searches for high-quality photos using the built-in Unsplash service.
-- `apply_artboard_preset`: Quickly resizes to standard sizes (IG, X, HD, A4).
-- `export_png` / `export_object`: Triggers downloads or returns object data.
+### 6. Utilities & Assets
+- `clear_canvas`: Removes all objects.
+- `search_unsplash`: Searches Unsplash; returns compact records (id, alt, size, photographer, small/regular URLs).
+- `export_png` / `export_object`: Export the canvas or a single object as an image.
 
 ## Development
 

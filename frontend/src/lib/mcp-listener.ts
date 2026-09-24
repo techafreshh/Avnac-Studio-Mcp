@@ -1,5 +1,6 @@
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import { SubmitResponse } from "../../wailsjs/go/mcp/AvnacMCP";
+import { idbGetEditorRecord, idbSetDocumentName } from "@/lib/avnac-editor-idb";
 import { useSceneEditorStore } from "@/features/scene-editor/store";
 import {
   SARASWATI_ROOT_ID,
@@ -368,6 +369,99 @@ export function initMCPListener(navigate?: (options: any) => void) {
           }
         } catch (err: any) {
           respondError(err?.message || String(err));
+        }
+        return;
+      }
+
+      if (action === "open_workspace") {
+        const fileId = typeof payload?.fileId === "string" ? payload.fileId.trim() : "";
+        if (!fileId) {
+          if (requestId) SubmitResponse(requestId, { error: "fileId is required (from list_files)" });
+          return;
+        }
+        try {
+          const record = await idbGetEditorRecord(fileId);
+          if (!record) {
+            if (requestId) {
+              SubmitResponse(requestId, {
+                error: `No saved file with id '${fileId}'. Call list_files to see available canvases.`,
+              });
+            }
+            return;
+          }
+          // Already active and loaded? Report without re-navigating.
+          const current = useSceneEditorStore.getState();
+          if (current.documentId === fileId && current.scene && !current.isLoading) {
+            if (requestId) {
+              SubmitResponse(requestId, {
+                success: true,
+                id: fileId,
+                name: current.documentName || "Untitled",
+                width: current.scene.artboard.width,
+                height: current.scene.artboard.height,
+                nodeCount: Object.keys(current.scene.nodes).length,
+                message: `Canvas '${current.documentName || "Untitled"}' is already open`,
+              });
+            }
+            return;
+          }
+          if (activeNavigate) {
+            // Navigate and let the /scene route own the load, mirroring the
+            // create_canvas single-writer contract.
+            void activeNavigate({ to: "/scene", search: { id: fileId } });
+            const ready = await waitForDocument(fileId);
+            if (!ready.ok) {
+              if (requestId) SubmitResponse(requestId, { error: `Failed to open canvas: ${ready.error}` });
+              return;
+            }
+          } else {
+            // Fallback when no router is wired (tests): direct load.
+            await store.load(fileId);
+          }
+          const done = useSceneEditorStore.getState();
+          if (requestId) {
+            SubmitResponse(requestId, {
+              success: true,
+              id: fileId,
+              name: done.documentName || "Untitled",
+              width: done.scene?.artboard.width ?? record.document?.artboard?.width ?? 0,
+              height: done.scene?.artboard.height ?? record.document?.artboard?.height ?? 0,
+              nodeCount: done.scene ? Object.keys(done.scene.nodes).length : 0,
+              message: `Canvas '${done.documentName || "Untitled"}' opened`,
+            });
+          }
+        } catch (err: any) {
+          if (requestId) SubmitResponse(requestId, { error: err?.message || String(err) });
+        }
+        return;
+      }
+
+      if (action === "rename_workspace") {
+        const fileId = typeof payload?.fileId === "string" ? payload.fileId.trim() : "";
+        const newName = typeof payload?.name === "string" ? payload.name.trim() : "";
+        if (!fileId || !newName) {
+          if (requestId) SubmitResponse(requestId, { error: "fileId and name are required" });
+          return;
+        }
+        try {
+          const active = useSceneEditorStore.getState();
+          if (active.documentId === fileId) {
+            // Canonical path: the store persists the name with the live doc.
+            active.setDocumentName(newName);
+            await useSceneEditorStore.getState().commitDocumentName();
+          } else {
+            await idbSetDocumentName(fileId, newName);
+          }
+          if (requestId) {
+            SubmitResponse(requestId, {
+              success: true,
+              id: fileId,
+              name: newName,
+              message: `File renamed to '${newName}'`,
+            });
+          }
+        } catch (err: any) {
+          if (requestId) SubmitResponse(requestId, { error: err?.message || String(err) });
         }
         return;
       }

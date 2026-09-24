@@ -39,6 +39,15 @@ Avnac Studio is a modern, web-native graphic design canvas built with Wails, Rea
 | `set_background` | Change artboard background color | `color` (hex string, e.g. `"#0f172a"`) |
 | `clear_canvas` | Remove all objects from the canvas | None |
 
+### File Management (saved canvases)
+| Tool | Purpose | Key Arguments |
+|---|---|---|
+| `list_files` | List all saved canvas files: `{id, name, width, height, updatedAt}` | None |
+| `open_canvas` | Open a saved file by workspace id, navigate to it, make it the active scene | `fileId` (from `list_files`; `id`/`workspaceId` accepted) |
+| `rename_file` | Rename a saved file (and the live editor title if open) | `fileId`, `name` |
+
+Use these whenever the user references an existing file that is not currently open — e.g. *"restyle the webinar slide"*. Call `get_canvas_summary` first; if it reports no active canvas scene, call `list_files`, locate the file by name, then `open_canvas`. **Never recreate an existing design in a new file.** There is no duplicate or delete tool over MCP; the canvas title can also be changed later via `rename_file`.
+
 ### Asset Discovery
 | Tool | Purpose | Key Arguments |
 |---|---|---|
@@ -103,7 +112,7 @@ Each element in the `elements` array supports:
 - **`text`**:
   - `text`: Text content string.
   - `fontSize`: Font size in pixels (e.g. `64` for headline, `24` for subhead).
-  - `fontFamily`: Google Font family (e.g. `'Inter'`, `'Poppins'`, `'Montserrat'`, `'Playfair Display'`).
+  - `fontFamily`: Google Font family (e.g. `'Inter'`, `'Poppins'`, `'Montserrat'`, `'Playfair Display'`). Verified-rendering fonts are `Poppins`, `Inter`, `DM Serif Display`; if a screenshot shows fallback glyphs, switch to a verified font.
   - `fontWeight`: `"400"` (default), `"500"`, `"600"`, `"700"`/`"bold"`.
   - `fontStyle`: `"normal"` (default) or `"italic"`.
   - `textAlign`: `"left"` (default), `"center"`, `"right"`.
@@ -122,23 +131,53 @@ Each element in the `elements` array supports:
 
 ---
 
-## 5. Standard 6-Step Design Workflow
+## 5. Standard Design Workflow: Brief → Setup → Compose → Verify
 
-Always follow this structured workflow when designing:
+### Phase 0 — Design Brief (before ANY tool call)
 
-1. **Inspect First**: Call `get_canvas_summary` to understand the existing canvas state, artboard dimensions, and any pre-existing elements.
-2. **Setup Canvas**: If starting a new design or the sizing does not fit the goal, call `create_canvas` (e.g. `1080x1080` for Instagram square, `1920x1080` for landscape) or `apply_artboard_preset`. Always pass a descriptive `name` (e.g. `"Summer Festival Flyer"`) — it becomes the canvas title shown in Files and used for export filenames. There is no rename tool, so the title can only be set at creation; omitting `name` leaves the canvas as `"Untitled"`. (Note: `modify_elements` with `name` renames a *layer*, not the canvas.)
-3. **Establish Atmosphere & Palette**: Call `set_background` to establish the mood (e.g., deep dark `#0a0f1d`, clean warm white `#fafafa`, or bold `#1e1b4b`).
-4. **Gather Imagery**: If the design benefits from photography, call `search_unsplash` with relevant keywords to get high-res URLs.
-5. **Declarative Composition**: Call `render_elements` with all design components in a **single call**:
-   - Background card / overlay container panels.
-   - Images and photo frames.
-   - Text hierarchy: Headline $\rightarrow$ Subheadline $\rightarrow$ Body / Call-To-Action.
-   - Accents: pill badges, divider lines, stickers.
-6. **Visual Audit & Refine**: Call `get_canvas_image` to inspect the visual result. Look for:
-   - Contrast between text and background.
-   - Generous margins (keep content at least 40–80px away from canvas borders).
-   - If anything needs adjustment, call `modify_elements` with the object's `objectId`.
+Never start with tool calls. First reason about the image the user wants and turn their request into a complete brief:
+
+1. **Extract known constraints**: dimensions, exact copy (headline/subhead/body text), brand or shop names, dates/addresses, palette, style keywords, imagery requirements.
+2. **Identify critical unknowns**: real text content, names, dates, addresses, size intent. If any critical info is missing, **ask the user up to 3 targeted questions and stop** — do not call tools yet. If nothing critical is missing, state your assumptions explicitly (e.g. *"Using the placeholder shop name 'KUMO RAMEN' — flag if you want the real one"*) and proceed.
+3. **Write a compact design plan**: layout zones with approximate coordinates, type hierarchy, palette, fonts, asset needs. This brief is the checklist the Verify phase audits against.
+4. **Edit requests**: write a diff-oriented brief (what changes, what stays) and always start from the real canvas. If the target file is not currently open, `get_canvas_summary` will report no active scene — then call `list_files`, locate the file by name, and `open_canvas(fileId)`. **Never silently recreate an existing design in a new file**, and never present a recreation as an edit.
+
+### Phase 1 — Inspect & Setup
+
+1. Call `get_canvas_summary` to understand the active canvas state, artboard dimensions, and pre-existing elements.
+2. For a **new** design: call `create_canvas` with dimensions, a descriptive `name`, and `backgroundColor`. `create_canvas` already applies the background — **do not call `set_background` again with the same value**.
+3. To open an existing file: `list_files` → `open_canvas(fileId)`. To retitle any file: `rename_file(fileId, name)`.
+4. Avoid redundant inspection: `get_canvas_summary` and `list_objects` return overlapping data — call one (usually `get_canvas_summary`), not both, unless you specifically need raw IDs.
+
+### Phase 2 — Atmosphere & Assets
+
+- If the background was not set at `create_canvas`, call `set_background` to establish the mood (e.g. deep dark `#0a0f1d`, clean warm white `#fafafa`, bold `#1e1b4b`).
+- If the design benefits from photography, call `search_unsplash` with relevant keywords. Results are compact: pick from `id`, `alt_description`, `width`/`height`, and `urls.regular` (preferred for canvas placement) or `urls.small` (for thumbnails).
+- Call `get_font_list` if unsure which fonts are available.
+
+### Phase 3 — Declarative Composition
+
+Call `render_elements` with all design components in a **single call**, layered bottom → top:
+- Background card / overlay container panels.
+- Images and photo frames.
+- Text hierarchy: Headline → Subheadline → Body / Call-To-Action.
+- Accents: pill badges, divider lines, stickers.
+
+Prefer the verified fonts `Poppins`, `Inter`, and `DM Serif Display`; other Google Fonts are allowed, but if a screenshot shows fallback glyphs or wrong sizes, switch the text to a verified font via `modify_elements`. Keep content at least 40–80px away from canvas borders.
+
+### Phase 4 — Verify Against the Brief
+
+Call `get_canvas_image` (one audit screenshot per milestone — not per element) and compare it against **the design brief and the user's original request**, item by item:
+
+- Required content present and spelled correctly (headline, subhead, dates, addresses, CTAs).
+- Dimensions and orientation match the request.
+- Hierarchy, palette, and style match the brief.
+- Fonts actually rendered (no serif fallbacks where a sans font was intended, no tiny text).
+- No unintended placeholder or invented text.
+
+Then:
+1. **Auto-fix once**: if something mismatches, correct it with `modify_elements` (plus `align_objects` / `group_objects` for layout), take one more screenshot.
+2. **Report honestly**: give an item-by-item pass/fail against the original request. Explicitly flag anything you invented or had to approximate. If verification still fails after the fix pass, say so — never claim success silently.
 
 ---
 
